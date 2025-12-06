@@ -1,0 +1,894 @@
+// =============================================================================
+// KROSS BLOCKCHAIN SDK - Complete TypeScript Implementation
+// =============================================================================
+
+import {
+  transfer,
+  massTransfer,
+  lease,
+  cancelLease,
+  alias,
+  issue,
+  reissue,
+  burn,
+  setScript,
+  setAssetScript,
+  invokeScript,
+  data,
+  sponsorship,
+  broadcast,
+  libs
+} from '@waves/waves-transactions';
+
+// =============================================================================
+// CONFIGURATION
+// =============================================================================
+
+export const NODE_URLS = {
+  primary: 'https://nodes.krossexplorer.com',
+  backup1: 'https://nodes2.krossexplorer.com',
+  backup2: 'https://nodes3.krossexplorer.com'
+};
+
+export const EXPLORER_URL = 'https://krossexplorer.com';
+export const API_URL = 'https://krossexplorer.com/api';
+export const CHAIN_ID = 'N';
+
+export const FEES = {
+  transfer: 0.001,
+  massTransfer: 0.007,
+  lease: 0.001,
+  cancelLease: 0.001,
+  alias: 0.001,
+  issue: 1,
+  reissue: 0.001,
+  burn: 0.001,
+  setScript: 0.01,
+  setAssetScript: 1,
+  invokeScript: 0.005,
+  data: 0.001,
+  sponsorship: 0.001,
+  smartAssetExtra: 0.004
+};
+
+// =============================================================================
+// WALLET & KEY DERIVATION
+// =============================================================================
+
+/**
+ * Creates a new Kross wallet with exactly 15-word seed phrase
+ */
+export function createWallet(): {
+  seedPhrase: string;
+  address: string;
+  publicKey: string;
+  privateKey: string;
+  encodedSeed: string;
+} {
+  const seed = libs.crypto.randomSeed(15);
+  const normalizedSeed = seed.split(/\s+/).join(' ');
+  
+  return {
+    seedPhrase: normalizedSeed,
+    address: libs.crypto.address(normalizedSeed, CHAIN_ID),
+    publicKey: libs.crypto.publicKey(normalizedSeed),
+    privateKey: libs.crypto.privateKey(normalizedSeed),
+    encodedSeed: encodeSeedPhrase(normalizedSeed)
+  };
+}
+
+/**
+ * Imports wallet from existing seed phrase (validates 15 words)
+ */
+export function importWallet(seedPhrase: string): {
+  seedPhrase: string;
+  address: string;
+  publicKey: string;
+  privateKey: string;
+  encodedSeed: string;
+} {
+  const normalized = seedPhrase.trim().split(/\s+/).join(' ');
+  const words = normalized.split(' ');
+  
+  if (words.length !== 15) {
+    throw new Error(`Kross wallets require exactly 15 seed words. Got ${words.length}`);
+  }
+  
+  return {
+    seedPhrase: normalized,
+    address: libs.crypto.address(normalized, CHAIN_ID),
+    publicKey: libs.crypto.publicKey(normalized),
+    privateKey: libs.crypto.privateKey(normalized),
+    encodedSeed: encodeSeedPhrase(normalized)
+  };
+}
+
+/**
+ * Validates seed phrase format (15 words, single spacing)
+ */
+export function validateSeedPhrase(seedPhrase: string): boolean {
+  const normalized = seedPhrase.trim().split(/\s+/).join(' ');
+  const words = normalized.split(' ');
+  return words.length === 15 && words.every(w => w.length > 0);
+}
+
+/**
+ * Derives private key from seed phrase
+ */
+export function derivePrivateKey(seedPhrase: string): string {
+  const normalized = seedPhrase.trim().split(/\s+/).join(' ');
+  return libs.crypto.privateKey(normalized);
+}
+
+/**
+ * Derives public key from seed phrase
+ */
+export function derivePublicKey(seedPhrase: string): string {
+  const normalized = seedPhrase.trim().split(/\s+/).join(' ');
+  return libs.crypto.publicKey(normalized);
+}
+
+/**
+ * Derives address from seed phrase
+ */
+export function deriveAddress(seedPhrase: string): string {
+  const normalized = seedPhrase.trim().split(/\s+/).join(' ');
+  return libs.crypto.address(normalized, CHAIN_ID);
+}
+
+/**
+ * Derives address from public key
+ */
+export function getAddressFromPublicKey(publicKey: string): string {
+  return libs.crypto.address({ publicKey }, CHAIN_ID);
+}
+
+/**
+ * Derives address from private key
+ */
+export function getAddressFromPrivateKey(privateKey: string): string {
+  const publicKey = libs.crypto.publicKey({ privateKey });
+  return libs.crypto.address({ publicKey }, CHAIN_ID);
+}
+
+/**
+ * Encodes seed phrase to Base58 format
+ */
+export function encodeSeedPhrase(seedPhrase: string): string {
+  const normalized = seedPhrase.trim().split(/\s+/).join(' ');
+  const bytes = libs.crypto.stringToBytes(normalized);
+  return libs.crypto.base58Encode(bytes);
+}
+
+/**
+ * Decodes Base58 encoded seed phrase back to words
+ */
+export function decodeSeedPhrase(encodedSeed: string): string {
+  const bytes = libs.crypto.base58Decode(encodedSeed);
+  return libs.crypto.bytesToString(bytes);
+}
+
+/**
+ * Derives all wallet data from encoded seed
+ */
+export function deriveFromEncodedSeed(encodedSeed: string): {
+  seedPhrase: string;
+  address: string;
+  publicKey: string;
+  privateKey: string;
+  encodedSeed: string;
+} {
+  const seedPhrase = decodeSeedPhrase(encodedSeed);
+  const normalized = seedPhrase.trim().split(/\s+/).join(' ');
+  
+  return {
+    seedPhrase: normalized,
+    address: libs.crypto.address(normalized, CHAIN_ID),
+    publicKey: libs.crypto.publicKey(normalized),
+    privateKey: libs.crypto.privateKey(normalized),
+    encodedSeed: encodedSeed
+  };
+}
+
+/**
+ * Validates Kross address format (starts with 3K)
+ */
+export function isValidKrossAddress(address: string): boolean {
+  return /^3K[a-zA-Z0-9]{33}$/.test(address);
+}
+
+// =============================================================================
+// ALIAS MANAGEMENT
+// =============================================================================
+
+export async function createAlias(
+  aliasName: string,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const tx = alias({ alias: aliasName, chainId: CHAIN_ID }, seedPhrase);
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function resolveAliasToAddress(
+  aliasName: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const response = await fetch(`${nodeUrl}/alias/by-alias/${aliasName}`);
+  if (!response.ok) throw new Error('Alias not found');
+  const data = await response.json();
+  return data.address;
+}
+
+export async function getAliasesForAddress(
+  address: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string[]> {
+  const response = await fetch(`${nodeUrl}/alias/by-address/${address}`);
+  if (!response.ok) return [];
+  return response.json();
+}
+
+// =============================================================================
+// TRANSFERS
+// =============================================================================
+
+export async function getAssetDetails(assetId: string, nodeUrl = NODE_URLS.primary) {
+  const response = await fetch(`${nodeUrl}/assets/details/${assetId}`);
+  if (!response.ok) throw new Error('Asset not found');
+  return response.json();
+}
+
+export async function isSmartAsset(assetId: string, nodeUrl = NODE_URLS.primary): Promise<boolean> {
+  const details = await getAssetDetails(assetId, nodeUrl);
+  return details.scripted === true;
+}
+
+export async function transferKSS(
+  recipient: string,
+  amount: number,
+  seedPhrase: string,
+  attachment?: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const tx = transfer({
+    recipient,
+    amount: Math.round(amount * 1e8),
+    chainId: CHAIN_ID,
+    attachment
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function transferToken(
+  recipient: string,
+  amount: number,
+  assetId: string,
+  seedPhrase: string,
+  attachment?: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const details = await getAssetDetails(assetId, nodeUrl);
+  const decimals = details.decimals || 0;
+  const amountInSmallestUnit = Math.round(amount * Math.pow(10, decimals));
+  
+  let fee = FEES.transfer * 1e8;
+  if (await isSmartAsset(assetId, nodeUrl)) {
+    fee += FEES.smartAssetExtra * 1e8;
+  }
+  
+  const tx = transfer({
+    recipient,
+    amount: amountInSmallestUnit,
+    assetId,
+    fee,
+    chainId: CHAIN_ID,
+    attachment
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function transferNFT(
+  recipient: string,
+  assetId: string,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  let fee = FEES.transfer * 1e8;
+  if (await isSmartAsset(assetId, nodeUrl)) {
+    fee += FEES.smartAssetExtra * 1e8;
+  }
+  
+  const tx = transfer({
+    recipient,
+    amount: 1,
+    assetId,
+    fee,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function executeMassTransfer(
+  recipients: { recipient: string; amount: number }[],
+  seedPhrase: string,
+  assetId?: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  if (recipients.length > 100) {
+    throw new Error('Maximum 100 recipients per mass transfer');
+  }
+  
+  let decimals = 8;
+  if (assetId) {
+    const details = await getAssetDetails(assetId, nodeUrl);
+    decimals = details.decimals || 0;
+  }
+  
+  const transfers = recipients.map(r => ({
+    recipient: r.recipient,
+    amount: Math.round(r.amount * Math.pow(10, decimals))
+  }));
+  
+  const tx = massTransfer({
+    transfers,
+    assetId,
+    fee: FEES.massTransfer * 1e8,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+// =============================================================================
+// ASSET OPERATIONS
+// =============================================================================
+
+export async function createNFT(
+  name: string,
+  description: string,
+  imageUrl: string,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<{ txId: string; assetId: string }> {
+  const fullDescription = imageUrl ? `${description}\n\nImage: ${imageUrl}` : description;
+  
+  const tx = issue({
+    name,
+    description: fullDescription,
+    quantity: 1,
+    decimals: 0,
+    reissuable: false,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return { txId: result.id, assetId: result.id };
+}
+
+export async function createAssetToken(
+  name: string,
+  description: string,
+  quantity: number,
+  decimals: number,
+  reissuable: boolean,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<{ txId: string; assetId: string }> {
+  const tx = issue({
+    name,
+    description,
+    quantity: Math.round(quantity * Math.pow(10, decimals)),
+    decimals,
+    reissuable,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return { txId: result.id, assetId: result.id };
+}
+
+export async function reissueToken(
+  assetId: string,
+  quantity: number,
+  reissuable: boolean,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const details = await getAssetDetails(assetId, nodeUrl);
+  const amount = Math.round(quantity * Math.pow(10, details.decimals));
+  
+  const tx = reissue({
+    assetId,
+    quantity: amount,
+    reissuable,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function burnToken(
+  assetId: string,
+  quantity: number,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const details = await getAssetDetails(assetId, nodeUrl);
+  const amount = Math.round(quantity * Math.pow(10, details.decimals));
+  
+  const tx = burn({
+    assetId,
+    amount,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+// =============================================================================
+// LEASING
+// =============================================================================
+
+export async function startLease(
+  recipient: string,
+  amount: number,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const tx = lease({
+    recipient,
+    amount: Math.round(amount * 1e8),
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function cancelLeaseById(
+  leaseId: string,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const tx = cancelLease({ leaseId, chainId: CHAIN_ID }, seedPhrase);
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function getActiveLeases(
+  address: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<any[]> {
+  const response = await fetch(`${nodeUrl}/leasing/active/${address}`);
+  if (!response.ok) return [];
+  return response.json();
+}
+
+// =============================================================================
+// SPONSORSHIP
+// =============================================================================
+
+export async function setSponsorshipFee(
+  assetId: string,
+  minSponsoredAssetFee: number,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const details = await getAssetDetails(assetId, nodeUrl);
+  const fee = Math.round(minSponsoredAssetFee * Math.pow(10, details.decimals));
+  
+  const tx = sponsorship({
+    assetId,
+    minSponsoredAssetFee: fee,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function disableSponsorship(
+  assetId: string,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const tx = sponsorship({
+    assetId,
+    minSponsoredAssetFee: 0,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function transferWithSponsoredFee(
+  recipient: string,
+  amount: number,
+  assetId: string,
+  feeAssetId: string,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const details = await getAssetDetails(assetId, nodeUrl);
+  const amountInSmallestUnit = Math.round(amount * Math.pow(10, details.decimals));
+  
+  const tx = transfer({
+    recipient,
+    amount: amountInSmallestUnit,
+    assetId,
+    feeAssetId,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+// =============================================================================
+// MULTISIG
+// =============================================================================
+
+export async function getPublicKeyForAddress(
+  address: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const response = await fetch(`${API_URL}/addresses/${address}`);
+  if (!response.ok) throw new Error(`Could not fetch public key for ${address}`);
+  const data = await response.json();
+  if (!data.publicKey) throw new Error(`No public key found for ${address}`);
+  return data.publicKey;
+}
+
+export async function createMultisigWallet(
+  coSignerAddresses: string[],
+  threshold: number,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  if (coSignerAddresses.length < 2 || coSignerAddresses.length > 5) {
+    throw new Error('Multisig requires 2-5 co-signers');
+  }
+  if (threshold < 1 || threshold > coSignerAddresses.length) {
+    throw new Error('Invalid threshold');
+  }
+  
+  const publicKeys = await Promise.all(
+    coSignerAddresses.map(addr => getPublicKeyForAddress(addr, nodeUrl))
+  );
+  
+  const sigVerifyConditions = publicKeys.map((pk, i) => 
+    `sigVerify(tx.bodyBytes, tx.proofs[${i}], base58'${pk}')`
+  ).join(' + ');
+  
+  const script = `
+    {-# STDLIB_VERSION 6 #-}
+    {-# CONTENT_TYPE EXPRESSION #-}
+    {-# SCRIPT_TYPE ACCOUNT #-}
+    
+    let requiredSigs = ${threshold}
+    let validSignatures = ${sigVerifyConditions}
+    validSignatures >= requiredSigs
+  `;
+  
+  const compileResponse = await fetch(`${nodeUrl}/utils/script/compileCode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: script })
+  });
+  
+  if (!compileResponse.ok) {
+    const error = await compileResponse.json();
+    throw new Error(`Script compilation failed: ${error.message}`);
+  }
+  
+  const { script: compiledScript } = await compileResponse.json();
+  
+  const tx = setScript({
+    script: compiledScript,
+    chainId: CHAIN_ID,
+    fee: FEES.setScript * 1e8
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export function createUnsignedTransaction(txParams: any): any {
+  return { ...txParams, proofs: [] };
+}
+
+export function signTransaction(unsignedTx: any, seedPhrase: string): any {
+  const privateKey = derivePrivateKey(seedPhrase);
+  const signature = libs.crypto.signBytes(
+    libs.crypto.base58Decode(unsignedTx.id),
+    privateKey
+  );
+  return {
+    ...unsignedTx,
+    proofs: [...unsignedTx.proofs, signature]
+  };
+}
+
+export function addSignatureToTransaction(tx: any, signature: string): any {
+  if (tx.proofs.includes(signature)) {
+    throw new Error('Signature already exists');
+  }
+  if (tx.proofs.length >= 8) {
+    throw new Error('Maximum 8 proofs allowed');
+  }
+  return {
+    ...tx,
+    proofs: [...tx.proofs, signature]
+  };
+}
+
+export function exportTransactionJson(tx: any): string {
+  return JSON.stringify(tx, null, 2);
+}
+
+export function importTransactionJson(json: string): any {
+  return JSON.parse(json);
+}
+
+export async function broadcastMultisigTransaction(
+  signedTx: any,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const response = await fetch(`${nodeUrl}/transactions/broadcast`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(signedTx)
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Broadcast failed: ${error.message}`);
+  }
+  
+  const result = await response.json();
+  return result.id;
+}
+
+// =============================================================================
+// DEPLOYMENT
+// =============================================================================
+
+export async function deployType3IssueAsset(
+  params: {
+    name: string;
+    description: string;
+    quantity: number;
+    decimals: number;
+    reissuable: boolean;
+    script?: string;
+  },
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<{ txId: string; assetId: string }> {
+  let compiledScript: string | undefined;
+  
+  if (params.script) {
+    const compileResponse = await fetch(`${nodeUrl}/utils/script/compileCode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: params.script })
+    });
+    
+    if (!compileResponse.ok) {
+      const error = await compileResponse.json();
+      throw new Error(`Script compilation failed: ${error.message}`);
+    }
+    
+    const compiled = await compileResponse.json();
+    compiledScript = compiled.script;
+  }
+  
+  const tx = issue({
+    name: params.name,
+    description: params.description,
+    quantity: Math.round(params.quantity * Math.pow(10, params.decimals)),
+    decimals: params.decimals,
+    reissuable: params.reissuable,
+    script: compiledScript,
+    chainId: CHAIN_ID
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return { txId: result.id, assetId: result.id };
+}
+
+export async function deployType12DataTransaction(
+  entries: Array<{ key: string; type: 'string' | 'integer' | 'boolean' | 'binary'; value: any }>,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const tx = data({ data: entries, chainId: CHAIN_ID }, seedPhrase);
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function deployType13AccountScript(
+  script: string,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const compileResponse = await fetch(`${nodeUrl}/utils/script/compileCode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: script })
+  });
+  
+  if (!compileResponse.ok) {
+    const error = await compileResponse.json();
+    throw new Error(`Script compilation failed: ${error.message}`);
+  }
+  
+  const { script: compiledScript } = await compileResponse.json();
+  
+  const tx = setScript({
+    script: compiledScript,
+    chainId: CHAIN_ID,
+    fee: FEES.setScript * 1e8
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function removeAccountScript(
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const tx = setScript({
+    script: null,
+    chainId: CHAIN_ID,
+    fee: FEES.setScript * 1e8
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+// NOTE: STDLIB_VERSION 5 is NOT supported for asset scripts on Kross
+// Use versions 3, 4, or 6
+export async function deployType15AssetScript(
+  assetId: string,
+  script: string,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const compileResponse = await fetch(`${nodeUrl}/utils/script/compileCode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: script })
+  });
+  
+  if (!compileResponse.ok) {
+    const error = await compileResponse.json();
+    throw new Error(`Script compilation failed: ${error.message}`);
+  }
+  
+  const { script: compiledScript } = await compileResponse.json();
+  
+  const tx = setAssetScript({
+    assetId,
+    script: compiledScript,
+    chainId: CHAIN_ID,
+    fee: FEES.setAssetScript * 1e8
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+export async function invokeDAppFunction(
+  dAppAddress: string,
+  functionName: string,
+  args: Array<{ type: string; value: any }>,
+  payment: Array<{ assetId?: string; amount: number }>,
+  seedPhrase: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<string> {
+  const tx = invokeScript({
+    dApp: dAppAddress,
+    call: { function: functionName, args },
+    payment,
+    chainId: CHAIN_ID,
+    fee: FEES.invokeScript * 1e8
+  }, seedPhrase);
+  
+  const result = await broadcast(tx, nodeUrl);
+  return result.id;
+}
+
+// =============================================================================
+// TRANSACTION HISTORY
+// =============================================================================
+
+export async function getTransactionHistory(
+  address: string,
+  limit = 100
+): Promise<any[]> {
+  const response = await fetch(`${API_URL}/transactions/address/${address}/limit/${limit}`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data[0] || [];
+}
+
+export async function getTransactionById(txId: string): Promise<any> {
+  const response = await fetch(`${API_URL}/transactions/info/${txId}`);
+  if (!response.ok) throw new Error('Transaction not found');
+  return response.json();
+}
+
+// =============================================================================
+// UTILITIES
+// =============================================================================
+
+export function formatTokenAmount(amount: number, decimals: number): string {
+  return (amount / Math.pow(10, decimals)).toFixed(decimals);
+}
+
+export function parseTokenAmount(amount: string, decimals: number): number {
+  return Math.round(parseFloat(amount) * Math.pow(10, decimals));
+}
+
+export async function getBalance(
+  address: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<number> {
+  const response = await fetch(`${nodeUrl}/addresses/balance/${address}`);
+  if (!response.ok) throw new Error('Failed to fetch balance');
+  const data = await response.json();
+  return data.balance / 1e8;
+}
+
+export async function getAssetBalances(
+  address: string,
+  nodeUrl = NODE_URLS.primary
+): Promise<any[]> {
+  const response = await fetch(`${nodeUrl}/assets/balance/${address}`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data.balances || [];
+}
+
+export async function waitForConfirmation(
+  txId: string,
+  maxAttempts = 30,
+  intervalMs = 2000,
+  nodeUrl = NODE_URLS.primary
+): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const response = await fetch(`${nodeUrl}/transactions/info/${txId}`);
+      if (response.ok) return true;
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+export function getExplorerUrl(txId: string): string {
+  return `${EXPLORER_URL}/transaction/${txId}`;
+}
+
+export function getAddressExplorerUrl(address: string): string {
+  return `${EXPLORER_URL}/address/${address}`;
+}
+
+export function getAssetExplorerUrl(assetId: string): string {
+  return `${EXPLORER_URL}/asset/${assetId}`;
+}
